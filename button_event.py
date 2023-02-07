@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2
 import RPi.GPIO as GPIO, time, os, subprocess
 
 from detector import Detector

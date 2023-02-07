@@ -1,10 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
-import os
+#import os
+import RPi.GPIO as GPIO, time, os, subprocess
 import threading
 from datetime import datetime
 from spectrometer3 import Spectrometer
+from time import sleep
+import  logging
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+log_file = '/home/pi/DATOS.log'
+log_format = logging.Formatter('[%(asctime)s] %(levelname)-8s [%(name)s.%(funcName)-10s:%(lineno)d] %(message)s')
+file_handler = logging.FileHandler(log_file, mode='a+')
+file_handler.setFormatter(log_format)
+file_handler.setLevel(logging.DEBUG)
+logger.addHandler(file_handler)
+logger.debug('debug')
+
+
+
+GPIO.setmode(GPIO.BCM)
+GPIO.setwarnings(False)
+gpio_busser = 27
+gpio_red = 20
+gpio_blue = 16
+gpio_green = 21
+GPIO.setup(gpio_busser,GPIO.OUT)
+GPIO.setup(gpio_red,GPIO.OUT)
+GPIO.setup(gpio_blue,GPIO.OUT)
+GPIO.setup(gpio_green,GPIO.OUT)
+
 
 class Thread(threading.Thread):
     """A stoppable subclass of threading.Thread"""
@@ -26,9 +53,9 @@ class Thread(threading.Thread):
 class Detector(Thread):
     DEFAULT_INTEGRATION_TIME    = 1.    # [seconds]
     DEFAULT_INTEGRATION_FACTOR  = 1./2  # For increasing/decreasing integration time
-    DEFAULT_THRESHOLD           = 2000  # Over baseline
-
-    MAX_INTEGRATION_TIME        = 10.
+    DEFAULT_THRESHOLD           = 30000  # Over baseline
+    DEFECTS = (1,)  # defective pixels
+    MAX_INTEGRATION_TIME        = 60.
     
     def __init__(self, ip, port=1865):
         Thread.__init__(self)
@@ -134,14 +161,23 @@ class Detector(Thread):
             Integration time: 1000000
             Wavelengths Intensities
         '''
-        f = os.path.join(path, '%s.txt' % datetime.strftime(datetime.now(), '%d-%m-%Y_%H:%M:%S'))
+        f = os.path.join(path, '%s.txt' % datetime.strftime(datetime.now(), '%d-%m-%Y_%H_%M_%S'))
         print("Saving in '%s'" % f)
+        #GPIO.output(gpio_red,GPIO.LOW)
+        #GPIO.output(gpio_blue,GPIO.LOW)
+        GPIO.output(gpio_busser,GPIO.HIGH)
+        GPIO.output(gpio_green,GPIO.HIGH)
+        time.sleep(0.2)
+        GPIO.output(gpio_busser, GPIO.LOW)
+        GPIO.output(gpio_green,GPIO.LOW)
         with open(f, 'w') as dst:
-            print('Serial Number:', self.SERIAL, file=dst)
-            print('Integration time: %d' % (self._integration_time*1e6), file=dst)
+            print('Serial Number:', 'Integration time: %d' % (self._integration_time*1e6), self.SERIAL, file=dst)
+#            print('Integration time: %d' % (self._integration_time*1e6), file=dst)
             print('Wavelength Intensities', file=dst)
             for i, s in enumerate(spectrum):
                 print('%s	%.8f' % (self._wavelengths[i], s), file=dst)
+                
+                
                 
     def shutdown(self):
         Thread.shutdown(self)
@@ -171,8 +207,12 @@ class Detector(Thread):
                 spectrum = self._spectrometer.get_spectrum()
                 if spectrum is None:
                     print('Warning: no spectrum')
+                    logger.debug("Warning: no spectrum")    
                     continue
-                spectrum = [int(v) for v in spectrum.split()]
+                spectrum = [float(v) for v in spectrum.split()]
+                for d in self.DEFECTS:
+                    spectrum[1] = 0.
+
                 MIN = min(spectrum)
         #        MEAN = sum(spectrum)/len(spectrum)
                 # Saturation detection
@@ -180,6 +220,10 @@ class Detector(Thread):
                 if MAX >= self._saturation:
                     self._integration_time *= self._integration_factor
                     print('Saturation: %d. Lowering integration time: %f' % (MAX, self._integration_time))
+                    #GPIO.output(gpio_red,GPIO.HIGH)
+                    #time.sleep(0.2)
+                    #GPIO.output(gpio_red, GPIO.LOW)
+                    logger.debug('Saturation: %d. Lowering integration time: %f' % (MAX, self._integration_time))
                     self._spectrometer.set_integration(self._integration_time*1e6)
                     continue
                 # Baseline reduction
@@ -189,6 +233,7 @@ class Detector(Thread):
                 if MAX > self._threshold: # Detection
                     # Save spectrum
                     print('Detection: %d' % MAX)
+                    logger.debug('Detection: %d' % MAX)
                     self._save_spectrum(self._location, spectrum)
                 else:
                     # Increase integration time
@@ -196,6 +241,10 @@ class Detector(Thread):
                     if self._integration_time > self.MAX_INTEGRATION_TIME:
                         self._integration_time = self.MAX_INTEGRATION_TIME
                     print('No detection: %d. Integration time: %f' % (MAX, self._integration_time))
+                    #GPIO.output(gpio_blue,GPIO.HIGH)
+                    #time.sleep(0.2)
+                    #GPIO.output(gpio_blue, GPIO.LOW)
+                    logger.debug('No detection: %d. Integration time: %f' % (MAX, self._integration_time))
                     self._spectrometer.set_integration(self._integration_time*1e6)
                     continue
     #    print('done.\nCurrent status:', spectrometer.get_current_status())
@@ -214,7 +263,7 @@ if __name__ == '__main__':
     
 #    detector.integration_time = integration_time
     print('Integration time: %s s' % detector.integration_time)
-
+    logger.debug('Integration time: %s s' % detector.integration_time)
     detector.start()
     
     while True:
